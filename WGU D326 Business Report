@@ -1,0 +1,114 @@
+–  B
+
+CREATE OR REPLACE FUNCTION format_currency(amount NUMERIC)
+RETURNS TEXT AS $$
+BEGIN
+RETURN '$' || TO_CHAR(amount, 'FM999,999,999.00');
+END;
+$$ LANGUAGE plpgsql;
+
+– C
+
+DROP TABLE IF EXISTS detailed_table;
+DROP TABLE IF EXISTS summary_table;
+
+CREATE TABLE detailed_table (
+store_id INT,
+rental_id INT,
+payment_id INT,
+payment_amount NUMERIC,
+formatted_payment_amount TEXT,
+rental_date DATE,
+PRIMARY KEY (store_id, rental_id, payment_id, payment_amount, formatted_payment_amount, rental_date)
+);
+
+CREATE TABLE summary_table (
+store_id INT,
+total_profit NUMERIC,
+	PRIMARY KEY (store_id, total_profit)
+);
+
+– D
+
+INSERT INTO detaield_table
+SELECT 
+s.store_id,
+r.rental_id AS rentral_id,
+p.payment_id AS payment_id,
+p.amount AS payment_amount,
+format_currency(SUM(p.amount)) AS formatted_payment_amount,
+r.rental_date AS rental_date
+FROM
+payment p
+JOIN rental r ON p.rental_id = r.rental_id
+JOIN inventory i ON r.inventroy_id=i.inventory_id
+JOIN store s ON i.store_id = s.store_id
+GROUP BY
+	s.store_id,
+	r.rental_id,
+	p.payment_id,
+	p.amount,
+	r.rental_date;
+
+SELECT * FROM summary_table;
+SELECT * FROM detailed_table;
+
+– E
+
+CREATE OR REPLACE FUNCTION update_summary()
+RETURNS TRIGGER 
+LANGUAGE plpgsql
+AS 
+$$
+BEGIN
+DELETE FROM summary_table;
+INSERT INTO summary_table (store_id, total_profit)
+SELECT
+		store_id,
+		payment_amount
+FROM detailed_table
+GROUP BY 
+detaield_table.store_id,
+detailed_table.payment_amount;
+RETURN NEW;
+END;
+$$
+
+CREATE TRIGGER update_summary
+AFTER INSERT ON detailed_table
+FOR EACH STATEMENT
+EXECUTE FUNCTION update_summary();
+
+– F
+
+CREATE OR REPLACE PROCEDURE refresh_tables()
+LANGUAGE plpgsql
+AS 
+$$
+BEGIN
+	DELETE FROM detailed_table;
+INSERT INTO detailed_table (store_id, rental_id, payment_id, payment_amount, formatted_payment_amount, rental_date)
+SELECT 
+s.store_id,
+r.rental_id,
+p.payment_id,
+p.amount AS payment_amount,
+format_currency(p.amount) AS formatted_payment_amount,
+r.rental_date
+FROM 
+payment p
+JOIN rental r ON p.rental_id = r.rental_id
+JOIN inventory i ON r.inventroy_id=i.inventory_id
+JOIN store s ON i.store_id = s.store_id;
+
+DELETE FROM summary_table;
+INSERT INTO summary_table (store_id, total_profit)
+SELECT 
+store_id,
+           SUM(payment_amount) AS total_profit
+FROM detailed_table
+    GROUP BY detailed_table.store_id;
+END;
+$$;
+
+CALL refresh_tables()
